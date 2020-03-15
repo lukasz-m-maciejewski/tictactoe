@@ -13,6 +13,9 @@ include(${CMAKE_BINARY_DIR}/conan.cmake)
 conan_add_remote(NAME bincrafters URL
                  https://api.bintray.com/conan/bincrafters/public-conan)
 
+conan_add_remote(NAME outcome
+                 URL https://api.bintray.com/conan/ned14/Outcome)
+
 conan_cmake_run(
   REQUIRES
   ${CONAN_EXTRA_REQUIRES}
@@ -20,6 +23,7 @@ conan_cmake_run(
   docopt.cpp/0.6.2
   fmt/6.1.2
   spdlog/1.5.0
+  Outcome/master@ned14/stable
   OPTIONS
   ${CONAN_EXTRA_OPTIONS}
   BASIC_SETUP

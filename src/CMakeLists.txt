@@ -8,4 +8,5 @@ target_link_libraries(
     CONAN_PKG::docopt.cpp
     CONAN_PKG::imgui-sfml
     CONAN_PKG::fmt
-    CONAN_PKG::spdlog)
+    CONAN_PKG::spdlog
+    CONAN_PKG::Outcome)
