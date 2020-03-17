@@ -1,14 +1,15 @@
 #include <vector>
 #include <system_error>
 #include <optional>
+#include <algorithm>
+#include <tuple>
 
 #include <spdlog/spdlog.h>
 #include <imgui.h>
 #include <imgui-SFML.h>
-#include <SFML/Graphics/RenderWindow.hpp>
 #include <SFML/System/Clock.hpp>
 #include <SFML/Window/Event.hpp>
-#include <SFML/Graphics/CircleShape.hpp>
+#include <SFML/Graphics.hpp>
 #include <outcome.hpp>
 
 #include <docopt/docopt.h>
@@ -16,6 +17,19 @@
 namespace outcome = OUTCOME_V2_NAMESPACE;
 
 namespace tictactoe {
+std::size_t pos2idx(int row, int column, int grid_size)
+{
+  return static_cast<std::size_t>(column + row * grid_size);
+}
+
+std::tuple<int, int> idx2pos(std::size_t index, int grid_size)
+{
+  const auto x = static_cast<int>(index) % grid_size;
+  const auto y = static_cast<int>(index) / grid_size;
+  return std::make_tuple(x, y);
+}
+
+
 enum class Player {
   CirclePlayer,
   CrossPlayer,
@@ -40,8 +54,8 @@ public:
   static outcome::result<Position>
     create_position_for_board(int row, int col, const Board& board);
 
-  int row() { return row_; }
-  int col() { return col_; }
+  int row() const { return row_; }
+  int col() const { return col_; }
 };
 
 class Board
@@ -126,6 +140,22 @@ public:
   }
 
   int size() const { return board_size_; }
+
+  FieldState get_field_state_at(const Position& pos)
+  {
+    return fields_.at(pos2idx(pos.row(), pos.col(), board_size_));
+  }
+
+  outcome::result<void> update_field_state_at(const Position& pos,
+    FieldState state)
+  {
+    if (state == FieldState::Empty) {
+      return std::errc::argument_out_of_domain;
+    }
+    fields_.at(pos2idx(pos.row(), pos.col(), board_size_)) = state;
+  }
+
+private:
 };
 
 outcome::result<Position>
@@ -139,6 +169,96 @@ outcome::result<Position>
   }
 
   return Position(row, col);
+}
+
+class Grid
+{
+  int num_boxes_side_;
+  int num_boxes_total_;
+  std::vector<sf::FloatRect> field_bounds_;
+  std::vector<sf::RectangleShape> fields_;
+  constexpr static float side_size = 10.0f;
+  constexpr static float offset_factor = 0.1f;
+  constexpr static float offset = side_size * offset_factor;
+  constexpr static float spacing = side_size + offset;
+
+public:
+  Grid(int num_boxes)
+    : num_boxes_side_{ num_boxes }, num_boxes_total_{ num_boxes * num_boxes }
+  {
+    field_bounds_.reserve(static_cast<std::size_t>(num_boxes_total_));
+    fields_.reserve(static_cast<std::size_t>(num_boxes_total_));
+
+    for (int i = 0; i < num_boxes_side_; ++i) {
+      for (int j = 0; j < num_boxes_side_; ++j) {
+        const auto rect_size = sf::Vector2f{ side_size, side_size };
+        sf::RectangleShape rect{ rect_size };
+
+        const float shift_x = offset + spacing * static_cast<float>(i);
+        const float shift_y = offset + spacing * static_cast<float>(j);
+        const auto position = sf::Vector2f{ shift_x, shift_y };
+
+        rect.setPosition(position);
+        rect.setFillColor(sf::Color::Red);
+
+        fields_.emplace_back(std::move(rect));
+        field_bounds_.emplace_back(position, rect_size);
+      }
+    }
+  }
+
+  void draw_on(sf::RenderWindow& window)
+  {
+    const float bgnd_size = offset + spacing * static_cast<float>(num_boxes_side_);
+    sf::RectangleShape background{ sf::Vector2f{ bgnd_size, bgnd_size } };
+    background.setPosition(0.0f, 0.0f);
+    background.setFillColor(sf::Color::Blue);
+    window.draw(background);
+
+    for (const auto& rect : fields_) { window.draw(rect); }
+  }
+
+  void handle_click(const sf::Vector2f& location)
+  {
+    auto it = std::find_if(fields_.begin(), fields_.end(), [&](const sf::RectangleShape& r) {
+      return r.getGlobalBounds().contains(location);
+    });
+    if (it != fields_.end()) {
+      auto color = it->getFillColor();
+      if (color == sf::Color::Red) {
+        it->setFillColor(sf::Color::Green);
+        return;
+      }
+
+      it->setFillColor(sf::Color::Red);
+    }
+  }
+
+  sf::View get_view() const
+  {
+    sf::View v;
+    const float num_boxes_f = static_cast<float>(num_boxes_side_);
+    const float side_len = offset + spacing * (num_boxes_f);
+    const float center_pos = side_len * 0.5f;
+    v.setSize(side_len, side_len);
+    v.setCenter(center_pos, center_pos);
+    return v;
+  }
+};
+
+sf::FloatRect ComputeAspectPreservingViewport(const sf::Vector2u& screen_size)
+{
+  if (screen_size.x >= screen_size.y) {
+    const float dim_ratio_inv =
+      static_cast<float>(screen_size.y) / static_cast<float>(screen_size.x);
+    const float left_margin = (1.0f - dim_ratio_inv) * 0.5f;
+    return sf::FloatRect{ left_margin, 0.0f, dim_ratio_inv, 1.0f };
+  }
+
+  const float dim_ratio_inv =
+    static_cast<float>(screen_size.x) / static_cast<float>(screen_size.y);
+  const float top_margin = (1.0f - dim_ratio_inv) * 0.5f;
+  return sf::FloatRect{ 0.0f, top_margin, 1.0f, dim_ratio_inv };
 }
 
 }// namespace tictactoe
@@ -157,21 +277,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] const char** argv)
   ImGui::GetStyle().ScaleAllSizes(scale_factor);
   ImGui::GetIO().FontGlobalScale = scale_factor;
 
-  std::vector<std::pair<std::string, bool>> states = { {
-    { "The Plan", false },
-    { "Getting Started", false },
-    { "Finding Errors As Soon As Possible", false },
-    { "Handling Command Line Parameters", false },
-    { "C++ 20 So Far", false },
-    { "Reading SFML Input States", false },
-    { "Managing Game State", false },
-    { "Making Our Game Testable", false },
-    { "Making Game State Allocator Aware", false },
-    { "Add Logging To Game Engine", false },
-    { "Draw A Game Map", false },
-    { "Dialog Trees", false },
-    { "Porting From SFML To SDL", false },
-  } };
+  tictactoe::Grid g{ 3 };
+
+  sf::FloatRect viewport_debug{};
 
   sf::Clock deltaClock;
   while (window.isOpen()) {
@@ -180,24 +288,43 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] const char** argv)
       ImGui::SFML::ProcessEvent(event);
 
       if (event.type == sf::Event::Closed) { window.close(); }
+
+      // catch the resize events
+      if (event.type == sf::Event::Resized) {
+        auto viewport =
+          tictactoe::ComputeAspectPreservingViewport(window.getSize());
+        viewport_debug = viewport;
+        auto view = g.get_view();
+        view.setViewport(viewport);
+        window.setView(view);
+      }
+
+      if (event.type == sf::Event::MouseButtonReleased) {
+        const sf::Vector2f mouse_pos_world =
+          window.mapPixelToCoords(sf::Mouse::getPosition(window));
+        g.handle_click(mouse_pos_world);
+        spdlog::info("click at ({}, {})", mouse_pos_world.x, mouse_pos_world.y);
+      }
     }
+
+    const auto window_size = window.getSize();
+    const auto window_size_text =
+      fmt::format("window size: {}x{}", window_size.x, window_size.y);
+    const auto viewport_text = fmt::format("viewport: {} {} {} {}",
+      viewport_debug.left,
+      viewport_debug.top,
+      viewport_debug.height,
+      viewport_debug.width);
 
     ImGui::SFML::Update(window, deltaClock.restart());
-
-
-    ImGui::Begin("The Plan");
-
-    int index = 0;
-    for (auto& step : states) {
-      ImGui::Checkbox(
-        fmt::format("{} : {}", index, step.first).c_str(), &step.second);
-      ++index;
-    }
-
-
+    ImGui::Begin("Debug info");
+    ImGui::TextUnformatted(window_size_text.c_str());
+    ImGui::TextUnformatted(viewport_text.c_str());
     ImGui::End();
 
-    window.clear();
+    window.clear(sf::Color::Black);
+    g.draw_on(window);
+
     ImGui::SFML::Render(window);
     window.display();
   }
