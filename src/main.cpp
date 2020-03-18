@@ -7,6 +7,7 @@
 #include <SFML/System/Clock.hpp>
 #include <SFML/Window/Event.hpp>
 #include <algorithm>
+#include <functional>
 #include <optional>
 #include <outcome.hpp>
 #include <system_error>
@@ -52,6 +53,8 @@ class Position {
   int row() const { return row_; }
   int col() const { return col_; }
 };
+
+using FieldChangeListener = std::function<FieldState(std::tuple<int, int>)>;
 
 class Board {
   using BoardData = std::vector<FieldState>;
@@ -153,8 +156,6 @@ class Board {
     }
     fields_.at(pos2idx(pos.row(), pos.col(), board_size_)) = state;
   }
-
- private:
 };
 
 outcome::result<Position> Position::create_position_for_board(
@@ -178,6 +179,8 @@ class Grid {
   constexpr static float offset_factor = 0.1f;
   constexpr static float offset = side_size * offset_factor;
   constexpr static float spacing = side_size + offset;
+
+  FieldChangeListener listener_;
 
  public:
   Grid(int num_boxes)
@@ -216,20 +219,49 @@ class Grid {
     }
   }
 
+  void toggle_color(sf::RectangleShape& s) {
+    auto color = s.getFillColor();
+    if (color == sf::Color::Red) {
+      s.setFillColor(sf::Color::Green);
+      return;
+    }
+
+    s.setFillColor(sf::Color::Red);
+  }
+
+  void set_color_for_state(sf::RectangleShape& s, FieldState state) {
+    switch (state) {
+      case FieldState::Empty:
+        s.setFillColor(sf::Color::Red);
+        return;
+      case FieldState::Circle:
+        s.setFillColor(sf::Color::Green);
+        return;
+      case FieldState::Cross:
+        s.setFillColor(sf::Color::Magenta);
+        return;
+    }
+  }
+
   void handle_click(const sf::Vector2f& location) {
     auto it = std::find_if(fields_.begin(), fields_.end(),
                            [&](const sf::RectangleShape& r) {
                              return r.getGlobalBounds().contains(location);
                            });
     if (it != fields_.end()) {
-      auto color = it->getFillColor();
-      if (color == sf::Color::Red) {
-        it->setFillColor(sf::Color::Green);
+      const auto begin = fields_.begin();
+      const std::size_t idx =
+          static_cast<std::size_t>(std::distance(begin, it));
+      if (listener_) {
+        set_color_for_state(*it, listener_(idx2pos(idx, num_boxes_side_)));
         return;
       }
-
-      it->setFillColor(sf::Color::Red);
+      toggle_color(*it);
     }
+  }
+
+  void set_clicked_handler(FieldChangeListener listener) {
+    listener_ = std::move(listener);
   }
 
   sf::View get_view() const {
@@ -259,7 +291,7 @@ sf::FloatRect ComputeAspectPreservingViewport(const sf::Vector2u& screen_size) {
 
 }  // namespace tictactoe
 
-int main([[maybe_unused]] int argc, [[maybe_unused]] const char** argv) {
+outcome::result<void> Main() {
   // Use the default logger (stdout, multi-threaded, colored)
   spdlog::info("Hello, {}!", "World");
 
@@ -271,15 +303,18 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] const char** argv) {
   ImGui::GetStyle().ScaleAllSizes(scale_factor);
   ImGui::GetIO().FontGlobalScale = scale_factor;
 
+  tictactoe::Board board = OUTCOME_TRYX(tictactoe::Board::create_board(3));
   tictactoe::Grid g{3};
 
   sf::FloatRect viewport_debug{};
+
+  bool show_overlay = false;
 
   sf::Clock deltaClock;
   while (window.isOpen()) {
     sf::Event event{};
     while (window.pollEvent(event)) {
-      ImGui::SFML::ProcessEvent(event);
+      if (show_overlay) ImGui::SFML::ProcessEvent(event);
 
       if (event.type == sf::Event::Closed) {
         window.close();
@@ -303,27 +338,35 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] const char** argv) {
       }
     }
 
-    const auto window_size = window.getSize();
-    const auto window_size_text =
-        fmt::format("window size: {}x{}", window_size.x, window_size.y);
-    const auto viewport_text = fmt::format(
-        "viewport: {} {} {} {}", viewport_debug.left, viewport_debug.top,
-        viewport_debug.height, viewport_debug.width);
+    if (show_overlay) {
+      const auto window_size = window.getSize();
+      const auto window_size_text =
+          fmt::format("window size: {}x{}", window_size.x, window_size.y);
+      const auto viewport_text = fmt::format(
+          "viewport: {} {} {} {}", viewport_debug.left, viewport_debug.top,
+          viewport_debug.height, viewport_debug.width);
 
-    ImGui::SFML::Update(window, deltaClock.restart());
-    ImGui::Begin("Debug info");
-    ImGui::TextUnformatted(window_size_text.c_str());
-    ImGui::TextUnformatted(viewport_text.c_str());
-    ImGui::End();
+      ImGui::SFML::Update(window, deltaClock.restart());
+      ImGui::Begin("Debug info");
+      ImGui::TextUnformatted(window_size_text.c_str());
+      ImGui::TextUnformatted(viewport_text.c_str());
+      ImGui::End();
+    }
 
     window.clear(sf::Color::Black);
     g.draw_on(window);
 
-    ImGui::SFML::Render(window);
+    if (show_overlay) ImGui::SFML::Render(window);
+
     window.display();
   }
 
   ImGui::SFML::Shutdown();
 
-  return 0;
+  return outcome::success();
+}
+
+int main([[maybe_unused]] int argc, [[maybe_unused]] const char** argv) {
+  auto result = Main();
+  return result ? 0 : 1;
 }
