@@ -16,6 +16,11 @@
 
 namespace outcome = OUTCOME_V2_NAMESPACE;
 
+template <typename T>
+auto EqualTo(const T& val) {
+  return [&val](const auto& x) { return x == val; };
+}
+
 namespace tictactoe {
 std::size_t pos2idx(int row, int column, int grid_size) {
   return static_cast<std::size_t>(column + row * grid_size);
@@ -81,21 +86,17 @@ class Engine {
   }
 
   std::optional<Player> maybe_winner_for_row(int row_id) {
-    if (0 < row_id or row_id >= board_size_) {
+    if (row_id < 0 or row_id >= board_size_) {
       return std::nullopt;
     }
 
     const auto row_begin = std::next(fields_.begin(), row_id * board_size_);
     const auto row_end = std::next(fields_.begin(), (row_id + 1) * board_size_);
 
-    if (std::all_of(row_begin, row_end, [](const auto& field_state) {
-          return field_state == FieldState::Circle;
-        })) {
+    if (std::all_of(row_begin, row_end, EqualTo(FieldState::Circle))) {
       return Player::CirclePlayer;
     }
-    if (std::all_of(row_begin, row_end, [](const auto& field_state) {
-          return field_state == FieldState::Cross;
-        })) {
+    if (std::all_of(row_begin, row_end, EqualTo(FieldState::Cross))) {
       return Player::CrossPlayer;
     }
 
@@ -103,7 +104,7 @@ class Engine {
   }
 
   std::optional<Player> maybe_winner_for_column(int col_id) {
-    if (0 < col_id or col_id >= board_size_) {
+    if (col_id < 0 or col_id >= board_size_) {
       return std::nullopt;
     }
 
@@ -131,6 +132,53 @@ class Engine {
     }
   }
 
+  std::optional<Player> maybe_get_winner_for_diagonal() {
+    bool all_eq = true;
+    for (int i = 1; i < board_size_; ++i) {
+      if (fields_[pos2idx(0, 0, board_size_)] !=
+          fields_[pos2idx(i, i, board_size_)]) {
+        all_eq = false;
+        break;
+      }
+    }
+    if (!all_eq) {
+      return std::nullopt;
+    }
+
+    switch (fields_[pos2idx(0, 0, board_size_)]) {
+      case FieldState::Circle:
+        return Player::CirclePlayer;
+      case FieldState::Cross:
+        return Player::CrossPlayer;
+      default:
+        return std::nullopt;
+    }
+  }
+
+  std::optional<Player> maybe_get_winner_for_antidiagonal() {
+    bool all_eq = true;
+    auto last_idx = board_size_ - 1;
+    for (int i = 1; i < board_size_; ++i) {
+      if (fields_[pos2idx(0, last_idx, board_size_)] !=
+          fields_[pos2idx(i, last_idx - i, board_size_)]) {
+        all_eq = false;
+        break;
+      }
+    }
+    if (!all_eq) {
+      return std::nullopt;
+    }
+
+    switch (fields_[pos2idx(0, last_idx, board_size_)]) {
+      case FieldState::Circle:
+        return Player::CirclePlayer;
+      case FieldState::Cross:
+        return Player::CrossPlayer;
+      default:
+        return std::nullopt;
+    }
+  }
+
   std::optional<Player> maybe_get_winner() {
     for (int i = 0; i < board_size_; ++i) {
       auto player_opt = maybe_winner_for_row(i);
@@ -144,6 +192,16 @@ class Engine {
       if (player_opt) {
         return player_opt;
       }
+    }
+
+    auto player_opt = maybe_get_winner_for_diagonal();
+    if (player_opt) {
+      return player_opt;
+    }
+
+    player_opt = maybe_get_winner_for_antidiagonal();
+    if (player_opt) {
+      return player_opt;
     }
 
     return std::nullopt;
