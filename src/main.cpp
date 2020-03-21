@@ -38,7 +38,7 @@ enum class FieldState {
   Cross,
 };
 
-class Board;
+class Engine;
 
 class Position {
   int row_;
@@ -47,8 +47,12 @@ class Position {
   Position(int row, int col) : row_{row}, col_{col} {}
 
  public:
-  static outcome::result<Position> create_position_for_board(
-      int row, int col, const Board& board);
+  static outcome::result<Position> create_position_for_engine(
+      std::tuple<int, int> p, const Engine& e) {
+    return create_position_for_engine(std::get<0>(p), std::get<1>(p), e);
+  }
+  static outcome::result<Position> create_position_for_engine(
+      int row, int col, const Engine& engine);
 
   int row() const { return row_; }
   int col() const { return col_; }
@@ -56,22 +60,24 @@ class Position {
 
 using FieldChangeListener = std::function<FieldState(std::tuple<int, int>)>;
 
-class Board {
+class Engine {
   using BoardData = std::vector<FieldState>;
   BoardData fields_;
   int board_size_;
+  Player active_player_ = Player::CrossPlayer;
+  std::optional<Player> winner_ = std::nullopt;
 
-  Board(int board_size)
+  Engine(int board_size)
       : fields_(static_cast<BoardData::size_type>(board_size * board_size),
                 FieldState::Empty),
         board_size_{board_size} {}
 
  public:
-  static outcome::result<Board> create_board(int board_size) {
+  static outcome::result<Engine> create_engine(int board_size) {
     if (board_size <= 1) {
       return std::errc::argument_out_of_domain;
     }
-    return Board(board_size);
+    return Engine(board_size);
   }
 
   std::optional<Player> maybe_winner_for_row(int row_id) {
@@ -143,10 +149,21 @@ class Board {
     return std::nullopt;
   }
 
-  int size() const { return board_size_; }
+  int board_size() const { return board_size_; }
+  std::optional<Player> maybe_winner() const { return winner_; }
 
   FieldState get_field_state_at(const Position& pos) {
     return fields_.at(pos2idx(pos.row(), pos.col(), board_size_));
+  }
+
+  Player next_player() {
+    switch (active_player_) {
+      case Player::CrossPlayer:
+        return Player::CirclePlayer;
+      case Player::CirclePlayer:
+      default:
+        return Player::CrossPlayer;
+    }
   }
 
   outcome::result<void> update_field_state_at(const Position& pos,
@@ -155,15 +172,37 @@ class Board {
       return std::errc::argument_out_of_domain;
     }
     fields_.at(pos2idx(pos.row(), pos.col(), board_size_)) = state;
+    return outcome::success();
+  }
+
+  outcome::result<void> handle_field_selected(const Position& pos) {
+    if (winner_) {
+      return outcome::success();
+    }
+
+    FieldState state = get_field_state_at(pos);
+    if (state != FieldState::Empty) {
+      return outcome::failure(std::errc::invalid_argument);
+    }
+
+    FieldState new_state = active_player_ == Player::CrossPlayer
+                               ? FieldState::Cross
+                               : FieldState::Circle;
+    OUTCOME_TRYV(update_field_state_at(pos, new_state));
+
+    active_player_ = next_player();
+    winner_ = maybe_get_winner();
+
+    return outcome::success();
   }
 };
 
-outcome::result<Position> Position::create_position_for_board(
-    int row, int col, const Board& board) {
-  if (row < 0 or row >= board.size()) {
+outcome::result<Position> Position::create_position_for_engine(
+    int row, int col, const Engine& engine) {
+  if (row < 0 or row >= engine.board_size()) {
     return std::errc::argument_out_of_domain;
   }
-  if (col < 0 or col >= board.size()) {
+  if (col < 0 or col >= engine.board_size()) {
     return std::errc::argument_out_of_domain;
   }
 
@@ -171,10 +210,12 @@ outcome::result<Position> Position::create_position_for_board(
 }
 
 class Grid {
+  Engine& engine_;
   int num_boxes_side_;
   int num_boxes_total_;
   std::vector<sf::FloatRect> field_bounds_;
   std::vector<sf::RectangleShape> fields_;
+
   constexpr static float side_size = 10.0f;
   constexpr static float offset_factor = 0.1f;
   constexpr static float offset = side_size * offset_factor;
@@ -183,11 +224,20 @@ class Grid {
   FieldChangeListener listener_;
 
  public:
-  Grid(int num_boxes)
-      : num_boxes_side_{num_boxes}, num_boxes_total_{num_boxes * num_boxes} {
+  Grid(Engine& engine)
+      : engine_{engine},
+        num_boxes_side_{engine.board_size()},
+        num_boxes_total_{num_boxes_side_ * num_boxes_side_} {
     field_bounds_.reserve(static_cast<std::size_t>(num_boxes_total_));
     fields_.reserve(static_cast<std::size_t>(num_boxes_total_));
 
+    auto result = update_grid();
+    if (!result) {
+      spdlog::error("initial grid update failed: {}", result.error().message());
+    }
+  }
+
+  outcome::result<void> update_grid() {
     for (int i = 0; i < num_boxes_side_; ++i) {
       for (int j = 0; j < num_boxes_side_; ++j) {
         const auto rect_size = sf::Vector2f{side_size, side_size};
@@ -199,11 +249,16 @@ class Grid {
 
         rect.setPosition(position);
         rect.setFillColor(sf::Color::Red);
+        auto pos =
+            OUTCOME_TRYX(Position::create_position_for_engine(j, i, engine_));
+        set_color_for_state(rect, engine_.get_field_state_at(pos));
 
         fields_.emplace_back(std::move(rect));
         field_bounds_.emplace_back(position, rect_size);
       }
     }
+
+    return outcome::success();
   }
 
   void draw_on(sf::RenderWindow& window) {
@@ -212,6 +267,16 @@ class Grid {
     sf::RectangleShape background{sf::Vector2f{bgnd_size, bgnd_size}};
     background.setPosition(0.0f, 0.0f);
     background.setFillColor(sf::Color::Blue);
+    if (auto w = engine_.maybe_winner()) {
+      switch (*w) {
+        case Player::CrossPlayer:
+          background.setFillColor(sf::Color::Magenta);
+          break;
+        case Player::CirclePlayer:
+          background.setFillColor(sf::Color::Green);
+          break;
+      }
+    }
     window.draw(background);
 
     for (const auto& rect : fields_) {
@@ -243,7 +308,7 @@ class Grid {
     }
   }
 
-  void handle_click(const sf::Vector2f& location) {
+  outcome::result<void> handle_click(const sf::Vector2f& location) {
     auto it = std::find_if(fields_.begin(), fields_.end(),
                            [&](const sf::RectangleShape& r) {
                              return r.getGlobalBounds().contains(location);
@@ -252,12 +317,13 @@ class Grid {
       const auto begin = fields_.begin();
       const std::size_t idx =
           static_cast<std::size_t>(std::distance(begin, it));
-      if (listener_) {
-        set_color_for_state(*it, listener_(idx2pos(idx, num_boxes_side_)));
-        return;
-      }
-      toggle_color(*it);
+      auto pos = OUTCOME_TRYX(Position::create_position_for_engine(
+          idx2pos(idx, num_boxes_side_), engine_));
+
+      OUTCOME_TRYV(engine_.handle_field_selected(pos));
+      OUTCOME_TRYV(update_grid());
     }
+    return outcome::success();
   }
 
   void set_clicked_handler(FieldChangeListener listener) {
@@ -303,8 +369,8 @@ outcome::result<void> Main() {
   ImGui::GetStyle().ScaleAllSizes(scale_factor);
   ImGui::GetIO().FontGlobalScale = scale_factor;
 
-  tictactoe::Board board = OUTCOME_TRYX(tictactoe::Board::create_board(3));
-  tictactoe::Grid g{3};
+  tictactoe::Engine board = OUTCOME_TRYX(tictactoe::Engine::create_engine(3));
+  tictactoe::Grid g{board};
 
   sf::FloatRect viewport_debug{};
 
@@ -333,7 +399,10 @@ outcome::result<void> Main() {
       if (event.type == sf::Event::MouseButtonReleased) {
         const sf::Vector2f mouse_pos_world =
             window.mapPixelToCoords(sf::Mouse::getPosition(window));
-        g.handle_click(mouse_pos_world);
+        auto result = g.handle_click(mouse_pos_world);
+        if (!result) {
+          spdlog::warn("click failed with: {}", result.error().message());
+        }
         spdlog::info("click at ({}, {})", mouse_pos_world.x, mouse_pos_world.y);
       }
     }
