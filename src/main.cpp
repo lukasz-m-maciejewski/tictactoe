@@ -14,6 +14,8 @@
 #include <tuple>
 #include <vector>
 
+#include "solarized.hpp"
+
 namespace outcome = OUTCOME_V2_NAMESPACE;
 
 template <typename T>
@@ -324,14 +326,14 @@ class Grid {
         offset + spacing * static_cast<float>(num_boxes_side_);
     sf::RectangleShape background{sf::Vector2f{bgnd_size, bgnd_size}};
     background.setPosition(0.0f, 0.0f);
-    background.setFillColor(sf::Color::Blue);
+    background.setFillColor(Solarized::base3);
     if (auto w = engine_.maybe_winner()) {
       switch (*w) {
         case Player::CrossPlayer:
-          background.setFillColor(sf::Color::Magenta);
+          background.setFillColor(Solarized::magenta);
           break;
         case Player::CirclePlayer:
-          background.setFillColor(sf::Color::Green);
+          background.setFillColor(Solarized::green);
           break;
       }
     }
@@ -355,13 +357,13 @@ class Grid {
   void set_color_for_state(sf::RectangleShape& s, FieldState state) {
     switch (state) {
       case FieldState::Empty:
-        s.setFillColor(sf::Color::Red);
+        s.setFillColor(Solarized::red);
         return;
       case FieldState::Circle:
-        s.setFillColor(sf::Color::Green);
+        s.setFillColor(Solarized::green);
         return;
       case FieldState::Cross:
-        s.setFillColor(sf::Color::Magenta);
+        s.setFillColor(Solarized::magenta);
         return;
     }
   }
