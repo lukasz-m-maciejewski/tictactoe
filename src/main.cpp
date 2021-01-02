@@ -7,12 +7,14 @@
 #include <SFML/System/Clock.hpp>
 #include <SFML/Window/Event.hpp>
 #include <algorithm>
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <outcome.hpp>
 #include <system_error>
 #include <tuple>
 #include <vector>
+namespace fs = std::filesystem;
 
 #include "solarized.hpp"
 
@@ -24,6 +26,30 @@ auto EqualTo(const T& val) {
 }
 
 namespace tictactoe {
+
+struct Configuration {
+  fs::path asset_dir;
+};
+
+outcome::result<fs::path> MakeAssetDir(const fs::path& start_dir,
+                                       const fs::path& work_dir) {
+  fs::path assets = start_dir.is_absolute() ? start_dir : work_dir / start_dir;
+
+  assets.remove_filename();
+  assets /= "../assets";
+
+  return assets;
+}
+
+outcome::result<Configuration> MakeConfiguration(
+    const std::vector<std::string>& commandline_args,
+    const fs::path& work_dir) {
+  Configuration config;
+  config.asset_dir =
+      OUTCOME_TRYX(MakeAssetDir(fs::path{commandline_args[0]}, work_dir));
+  return config;
+}
+
 std::size_t pos2idx(int row, int column, int grid_size) {
   return static_cast<std::size_t>(column + row * grid_size);
 }
@@ -64,8 +90,6 @@ class Position {
   int row() const { return row_; }
   int col() const { return col_; }
 };
-
-using FieldChangeListener = std::function<FieldState(std::tuple<int, int>)>;
 
 class Engine {
   using BoardData = std::vector<FieldState>;
@@ -181,6 +205,8 @@ class Engine {
     }
   }
 
+  Player get_active_player() { return active_player_; }
+
   std::optional<Player> maybe_get_winner() {
     for (int i = 0; i < board_size_; ++i) {
       auto player_opt = maybe_winner_for_row(i);
@@ -281,10 +307,13 @@ class Grid {
   constexpr static float offset = side_size * offset_factor;
   constexpr static float spacing = side_size + offset;
 
-  FieldChangeListener listener_;
+  sf::Image crossImage;
+  sf::Image circleImage;
+  sf::Texture crossTexture;
+  sf::Texture circleTexture;
 
  public:
-  Grid(Engine& engine)
+  Grid(const Configuration& config, Engine& engine)
       : engine_{engine},
         num_boxes_side_{engine.board_size()},
         num_boxes_total_{num_boxes_side_ * num_boxes_side_} {
@@ -295,6 +324,13 @@ class Grid {
     if (!result) {
       spdlog::error("initial grid update failed: {}", result.error().message());
     }
+
+    spdlog::info("current working dir is {}", fs::current_path().string());
+
+    crossImage.loadFromFile((config.asset_dir / "cross.png").string());
+    circleImage.loadFromFile((config.asset_dir / "circle.png").string());
+    crossTexture.loadFromImage(crossImage);
+    circleTexture.loadFromImage(circleImage);
   }
 
   outcome::result<void> update_grid() {
@@ -327,6 +363,7 @@ class Grid {
     sf::RectangleShape background{sf::Vector2f{bgnd_size, bgnd_size}};
     background.setPosition(0.0f, 0.0f);
     background.setFillColor(Solarized::base3);
+
     if (auto w = engine_.maybe_winner()) {
       switch (*w) {
         case Player::CrossPlayer:
@@ -344,26 +381,18 @@ class Grid {
     }
   }
 
-  void toggle_color(sf::RectangleShape& s) {
-    auto color = s.getFillColor();
-    if (color == sf::Color::Red) {
-      s.setFillColor(sf::Color::Green);
-      return;
-    }
-
-    s.setFillColor(sf::Color::Red);
-  }
-
   void set_color_for_state(sf::RectangleShape& s, FieldState state) {
     switch (state) {
       case FieldState::Empty:
-        s.setFillColor(Solarized::red);
+        s.setFillColor(Solarized::base3);
         return;
       case FieldState::Circle:
-        s.setFillColor(Solarized::green);
+        s.setFillColor(Solarized::base00);
+        s.setTexture(&circleTexture);
         return;
       case FieldState::Cross:
-        s.setFillColor(Solarized::magenta);
+        s.setFillColor(Solarized::base00);
+        s.setTexture(&crossTexture);
         return;
     }
   }
@@ -384,10 +413,6 @@ class Grid {
       OUTCOME_TRYV(update_grid());
     }
     return outcome::success();
-  }
-
-  void set_clicked_handler(FieldChangeListener listener) {
-    listener_ = std::move(listener);
   }
 
   sf::View get_view() const {
@@ -415,11 +440,12 @@ sf::FloatRect ComputeAspectPreservingViewport(const sf::Vector2u& screen_size) {
   return sf::FloatRect{0.0f, top_margin, 1.0f, dim_ratio_inv};
 }
 
-}  // namespace tictactoe
-
-outcome::result<void> Main() {
+outcome::result<void> Main(const std::vector<std::string>& args) {
   // Use the default logger (stdout, multi-threaded, colored)
   spdlog::info("Hello, {}!", "World");
+
+  const tictactoe::Configuration config =
+      OUTCOME_TRYX(tictactoe::MakeConfiguration(args, fs::current_path()));
 
   sf::RenderWindow window(sf::VideoMode(1024, 768), "ImGui + SFML = <3");
   window.setFramerateLimit(60);
@@ -430,7 +456,7 @@ outcome::result<void> Main() {
   ImGui::GetIO().FontGlobalScale = scale_factor;
 
   tictactoe::Engine board = OUTCOME_TRYX(tictactoe::Engine::create_engine(3));
-  tictactoe::Grid g{board};
+  tictactoe::Grid g{config, board};
 
   sf::FloatRect viewport_debug{};
 
@@ -494,8 +520,11 @@ outcome::result<void> Main() {
 
   return outcome::success();
 }
+}  // namespace tictactoe
 
-int main([[maybe_unused]] int argc, [[maybe_unused]] const char** argv) {
-  auto result = Main();
+int main(int argc, const char** argv) {
+  std::vector<std::string> args = {argv, argv + argc};
+  spdlog::info("args[0]:{}", args[0]);
+  auto result = tictactoe::Main(args);
   return result ? 0 : 1;
 }

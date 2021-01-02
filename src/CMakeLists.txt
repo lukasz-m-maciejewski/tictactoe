@@ -19,3 +19,6 @@ add_library(solarized_colors
     PRIVATE
       CONAN_PKG::imgui-sfml
     )
+
+  configure_file(${CMAKE_SOURCE_DIR}/assets/cross.png ${CMAKE_BINARY_DIR}/assets/cross.png COPYONLY)
+  configure_file(${CMAKE_SOURCE_DIR}/assets/circle.png ${CMAKE_BINARY_DIR}/assets/circle.png COPYONLY)
